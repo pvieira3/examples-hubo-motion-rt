@@ -438,11 +438,138 @@ void flattenFoot( Hubo_Control &hubo, zmp_traj_element_t &elem, nudge_state_t &s
 
 }
 
+void balance( Hubo_Control &hubo )
+{
+    std::cout << "balancing ... \n";
 
+    double compRollGain = 0.0015;
+    double compPitchGain = 0.0015;
+    double pitchAngleGain = 0.5*M_PI/180.0;
+    double rollAngleGain = 0.3*M_PI/180;
 
+    double leftP=0, leftR=0, rightP=0, rightR=0; 
 
+    double dt=0;
+    double shutdownTime=5; // seconds
+    double absoluteTime=0; // absolute time
+    double time = hubo.getTime(); // initial time (s)
+    int i=0, imax=40;
 
+    // set ankle joints to velocity control
+    hubo.setVelocityControl(RAP);
+    hubo.setVelocityControl(RAR);
+    hubo.setVelocityControl(LAP);
+    hubo.setVelocityControl(LAR);
 
+    while(absoluteTime < shutdownTime)
+    {
+        hubo.update(true);
+        dt = hubo.getTime() - time;
+        time = hubo.getTime();
+
+        if(dt > 0)
+        {
+            absoluteTime += dt;
+
+            // compute ankle joint velocities based on IMU and ankle torques
+            leftP = pitchAngleGain*hubo.getAngleY() + compPitchGain*hubo.getLeftFootMy();
+            leftR = rollAngleGain*hubo.getAngleX() + compRollGain*hubo.getLeftFootMx();
+            rightP = pitchAngleGain*hubo.getAngleY() + compPitchGain*hubo.getRightFootMy();
+            rightR = rollAngleGain*hubo.getAngleX() + compRollGain*hubo.getRightFootMx();
+
+            // Set joint velocities
+            hubo.setJointVelocity( RAP, rightP );
+            hubo.setJointVelocity( RAR, rightR );
+            hubo.setJointVelocity( LAP, leftP );
+            hubo.setJointVelocity( LAR, leftR );
+
+            // send controls
+            hubo.sendControls();
+
+             // print output every imax cycles
+            if( i>=imax )
+            {
+                std::cout //<< "\033[2J"
+                          << "RAP Vel: " << rightP
+                          << "\nRAR Vel: " << rightR
+                          << "\nLAP Vel: " << leftP
+                          << "\nLAR Vel: " << leftR
+                          << "\nRt Torques: " << hubo.getRightFootMx() << ", " << hubo.getRightFootMy()
+                          << "\nLt Torques: " << hubo.getLeftFootMx() << ", " << hubo.getLeftFootMy()
+                          << std::endl;
+            }
+            if(i>=imax) i=0; i++;
+        }
+    }
+}
+
+/**
+ * @function: impedanceController(Hubo_Control &hubo, zmp_traj_element_t &elemCurr, zmp_traj_element_t &elemPrev, double dt)
+ * @brief: takes the current desired joint angles and velocities in the legs
+ *         and adjusts it to achieve desired moment about the ankles
+ * @return: no return value. it adjust the desired joint angles by reference
+*/
+void impedanceController(Hubo_Control &hubo, Eigen::Vector2d &dqNew, zmp_traj_element_t &elemCurr, zmp_traj_element_t &elemPrev, double dt)
+{
+    Eigen::Vector2d q; // vector to hold our state values (positions and velocities)
+
+    // extract joint angles and velocities
+    q(0) = elemCurr.angles[LAP];
+    q(1) = (elemCurr.angles[LAP] - elemPrev.angles[LAP]) / dt;
+
+    
+
+    elemCurr.angles[LAP] +=
+    elemCurr.angles[RAP] += 
+}
+/**
+ * @function: impedanceEq( Eigen::Vector2d x )
+ * @brief: takes in position and velocity of joints and
+ *      returns impedance controller equation for dx
+ * @return: 2d vector of qdot and qddot
+*/
+Eigen::Vector2d impedanceEq(Hubo_Control &hubo, Eigen::Vector2d &dqNew )
+{
+    double Td = 0; // desired torque
+    double Tm = hubo.getRightFootMy() // get measured pitch torque
+    double dT = Tm - Td; // Torque(measure) - Torque(desired)
+    double M = 10, Q = 10, K = 10; // user set inertia, damping, spring constants
+
+    // state space rep.
+    Eigen::Vector2d dqNewDot;
+    Eigen::Matrix2d A, B;
+
+    A <<
+          0,   1,
+        K/M, Q/M;
+
+    B << 0, dT/M;
+
+    dqNewDot = A*dqNew + B
+
+    return dqNewDot;
+}
+
+/**
+ * @function: rk4( Hubo_Control &hubo, Eigen::Vector2d dq, double dt )
+ * @brief: intergration using runge-kutta method rk4
+ *      to get q (q,dq) from dq (dq,ddq).
+ * @return: returns the delta_q (joint angle q and joint
+ *          velocity dq 
+*/
+void rk4( Hubo_Control &hubo, Eigen::Vector2d &dqNew, double dt )
+{
+    Eigen::Vector2d k1, k2, k3, k4; // runge-kutta  increments
+
+    // compute runge-kutta increments
+    k1 = impedanceEq(hubo, dqNew);
+    k2 = impedanceEq(hubo, dqNew + .5*dt*k1);
+    k3 = impedanceEq(hubo, dqNew + .5*dt*k2);
+    k4 = impedanceEq(hubo, dqNew + k3);
+
+    // compute new delta q
+    dqNew = dqNew + dt*(k1 + 2*k2 + 2*k3 + k4)/6;
+}
 
 
 int main(int argc, char **argv)
@@ -471,6 +598,8 @@ int main(int argc, char **argv)
     for(int i=0; i<trajectory.count; i++)
         fprintf(stdout, "%d: RHR %f\n", i, trajectory.traj[i].angles[RHR] );
 
+    Eigen::Vector2d dq << 0, 0; // initial q and qdot for runge-kutta method
+    impedanceController(
 
     hubo.update(true);
     for(int i=0; i<HUBO_JOINT_COUNT; i++)
@@ -492,7 +621,6 @@ int main(int argc, char **argv)
 
     
     double dt, time, stime; stime=hubo.getTime(); time=hubo.getTime();
-
 
 /*
 //    while( time - stime < 7 )
@@ -543,6 +671,7 @@ int main(int argc, char **argv)
 
         flattenFoot( hubo, trajectory.traj[t], state, dt );
         //nudgeRefs( hubo, trajectory.traj[t], state, dt, hkin ); //vprev, verr, dt );
+
         for(int i=0; i<HUBO_JOINT_COUNT; i++)
         {
             hubo.setJointAngle( i, trajectory.traj[t].angles[i] );
@@ -561,16 +690,11 @@ int main(int argc, char **argv)
         hubo.setJointAngleMin( LHR, trajectory.traj[t].angles[RHR] );
         hubo.setJointAngleMax( RHR, trajectory.traj[t].angles[LHR] );
         hubo.sendControls();
+
+        impedanceController( hubo, dqNew, trajectory.traj[t], trajectory.traj[t-1], dt );
     }
 
-
-
-
-
-
-
-
-
-
-
+    balance( hubo );
+    std::cout << "End\n";
+    return 0;
 }
