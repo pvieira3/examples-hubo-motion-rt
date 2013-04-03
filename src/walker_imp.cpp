@@ -4,7 +4,9 @@
 #include <hubo-zmp.h>
 
 #include "HuboKin.h"
-
+#include <math.h>
+#include <eigen3/Eigen/Core>
+#include <eigen3/Eigen/Geometry>
 
 ach_channel_t zmp_chan;
 
@@ -504,6 +506,90 @@ void balance( Hubo_Control &hubo )
 }
 
 
+Eigen::Vector2d impedanceEqAP(Eigen::Vector2d dq, double dM)//Ankle Pitch
+{
+    double M,Q,K;
+    M = 60;
+    Q = 300;
+    K = 1100;
+    
+    Eigen::Vector2d dqDot;
+    Eigen::Matrix2d A;
+    Eigen::Vector2d B;
+
+    A <<    0,    1,
+         -K/M, -Q/M;
+    B <<    0, dM/M;
+
+    dqDot = A*dq + B;
+
+    return dqDot;
+}
+
+Eigen::Vector2d impedanceEqAR(Eigen::Vector2d dq, double dM)//Ankle Roll
+{
+    double M,Q,K;
+    M = 60;
+    Q = 300;
+    K = 1500;
+
+    Eigen::Vector2d dqDot;
+    Eigen::Matrix2d A;
+    Eigen::Vector2d B;
+
+    A <<    0,    1,
+         -K/M, -Q/M;
+    B <<    0, dM/M;
+
+    dqDot = A*dq + B;
+
+    return dqDot;
+}
+
+void rk4AP(Eigen::Vector2d &dq, double dM, double dt)//rk4 for ankle pitch
+{
+    Eigen::Vector2d k1(0,0), k2(0,0), k3(0,0), k4(0,0);
+    
+    k1 = impedanceEqAP(dq           , dM);
+    k2 = impedanceEqAP(dq + .5*dt*k1, dM);
+    k3 = impedanceEqAP(dq + .5*dt*k2, dM);
+    k4 = impedanceEqAP(dq +    dt*k3, dM);
+
+    dq = dq + dt*(k1 + 2*k2 + 2*k3 +k4)/6;
+
+}
+
+void rk4AR(Eigen::Vector2d &dq, double dM, double dt)//rk4 for ankle roll
+{
+    Eigen::Vector2d k1(0,0), k2(0,0), k3(0,0), k4(0,0);
+
+    k1 = impedanceEqAR(dq           , dM);
+    k2 = impedanceEqAR(dq + .5*dt*k1, dM);
+    k3 = impedanceEqAR(dq + .5*dt*k2, dM);
+    k4 = impedanceEqAR(dq +    dt*k3, dM);
+
+    dq = dq + dt*(k1 + 2*k2 + 2*k3 +k4)/6;
+
+}
+
+double impedanceControllerAP(Eigen::Vector2d &dq, double dM, double angle, double dt)
+{
+    double qNew;
+    rk4AP(dq,dM,dt);
+    qNew = angle +dq(0);
+    return qNew;
+}
+    
+double impedanceControllerAR(Eigen::Vector2d &dq, double dM, double angle, double dt)
+{
+    double qNew;
+    rk4AR(dq,dM,dt);
+    qNew = angle +dq(0);
+    return qNew;
+}
+
+   
+
 int main(int argc, char **argv)
 {
     Hubo_Control hubo;
@@ -530,6 +616,7 @@ int main(int argc, char **argv)
     for(int i=0; i<trajectory.count; i++)
         fprintf(stdout, "%d: RHR %f\n", i, trajectory.traj[i].angles[RHR] );
 
+
     hubo.update(true);
     for(int i=0; i<HUBO_JOINT_COUNT; i++)
     {
@@ -550,7 +637,21 @@ int main(int argc, char **argv)
 
     
     double dt, time, stime; stime=hubo.getTime(); time=hubo.getTime();
-
+    //double ptime;
+    double dM_RAP, dM_RAR, dM_LAP, dM_LAR;
+    double RAP_Desired, RAR_Desired, LAP_Desired, LAR_Desired;
+    Eigen::Vector2d dqRAP(0,0);
+    Eigen::Vector2d dqRAR(0,0);
+    Eigen::Vector2d dqLAP(0,0);
+    Eigen::Vector2d dqLAR(0,0);
+    double M_RAP_Desired = 0.0;
+    double M_RAR_Desired = 0.0;
+    double M_LAP_Desired = 0.0;
+    double M_LAR_Desired = 0.0;
+    double qNewRAP = 0.0;
+    double qNewRAR = 0.0;
+    double qNewLAP = 0.0;
+    double qNewLAR = 0.0;
 /*
 //    while( time - stime < 7 )
     while(true)
@@ -589,7 +690,7 @@ int main(int argc, char **argv)
       time = hubo.getTime();
     }
 
-
+    //ptime = hubo.getTime();//present time
     fprintf(stdout, "%d\n", (int)trajectory.count);
     for(int t=1; t<trajectory.count-1; t++)
     {
@@ -598,9 +699,10 @@ int main(int argc, char **argv)
         dt = hubo.getTime() - time;
         time = hubo.getTime();
 
-        flattenFoot( hubo, trajectory.traj[t], state, dt );
-        //nudgeRefs( hubo, trajectory.traj[t], state, dt, hkin ); //vprev, verr, dt );
+        //flattenFoot( hubo, trajectory.traj[t], state, dt );
 
+        
+        //nudgeRefs( hubo, trajectory.traj[t], state, dt, hkin ); //vprev, verr, dt );
         for(int i=0; i<HUBO_JOINT_COUNT; i++)
         {
             hubo.setJointAngle( i, trajectory.traj[t].angles[i] );
@@ -612,16 +714,40 @@ int main(int argc, char **argv)
                             +   trajectory.traj[t+1].angles[i] );
             hubo.setJointNominalAcceleration( i, 10*accel );
         }
+        
+        
+       
 
-        hubo.setJointAngle( RSR, trajectory.traj[t].angles[RSR] + hubo.getJointAngleMax(RSR) );
+        dM_RAP = hubo.getRightFootMy() - M_RAP_Desired;
+        RAP_Desired = trajectory.traj[t].angles[RAP];
+        qNewRAP = impedanceControllerAP(dqRAP, dM_RAP, RAP_Desired, dt);
+        hubo.setJointAngle(RAP, qNewRAP);
+        
+        dM_RAR = hubo.getRightFootMx() - M_RAR_Desired;
+        RAR_Desired = trajectory.traj[t].angles[RAR];
+        qNewRAR = impedanceControllerAR(dqRAR, dM_RAR, RAR_Desired, dt);
+        hubo.setJointAngle(RAR, qNewRAR);
+        
+        dM_LAP = hubo.getLeftFootMy() - M_LAP_Desired;
+        LAP_Desired = trajectory.traj[t].angles[LAP];
+        qNewLAP = impedanceControllerAP(dqLAP, dM_LAP, LAP_Desired, dt);
+        hubo.setJointAngle(LAP, qNewLAP);
+        
+        dM_LAR = hubo.getLeftFootMx() - M_LAR_Desired;
+        LAR_Desired = trajectory.traj[t].angles[LAR];
+        qNewLAR = impedanceControllerAR(dqLAR, dM_LAR, LAR_Desired, dt);
+        hubo.setJointAngle(LAR, qNewLAR);
+
+        hubo.setJointAngle( RSR, trajectory.traj[t].angles[RSR] + hubo.getJointAngleMin(RSR) );      
         hubo.setJointAngle( LSR, trajectory.traj[t].angles[LSR] + hubo.getJointAngleMin(LSR) );
 
         hubo.setJointAngleMin( LHR, trajectory.traj[t].angles[RHR] );
         hubo.setJointAngleMax( RHR, trajectory.traj[t].angles[LHR] );
         hubo.sendControls();
+        //usleep(10000);
     }
 
-    balance( hubo );
+    //balance( hubo );
     std::cout << "End\n";
     return 0;
 }
