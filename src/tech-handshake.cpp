@@ -1,8 +1,8 @@
-#include <Hubo_Tech.h>
+#include <Hubo_Control.h>
 
 int main( int argc, char **argv )
 {
-    Hubo_Tech hubo;
+    Hubo_Control hubo;
 
     Vector6d ql, ql0, qr, qr0;
     double time, dt;
@@ -35,10 +35,10 @@ int main( int argc, char **argv )
             if(i == imax)
                 std::cout << hubo.getRightHandMx() << "\t" << hubo.getRightHandMy() << std::endl;
             
-            hubo.setJointVelocity( REB, compGain*hubo.getRightHandMx()
+            hubo.setJointVelocity( REB, compGain*hubo.getRightHandMy()
                                         + springGain*(qr0(3)-hubo.getJointAngle(REB)) );
 
-            hubo.setJointVelocity( RSY, -compGain*hubo.getRightHandMy()
+            hubo.setJointVelocity( RSY, compGain*hubo.getRightHandMx()
                                         + springGain*(qr0(2)-hubo.getJointAngle(RSY)) );
 
             
