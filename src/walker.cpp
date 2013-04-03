@@ -621,7 +621,7 @@ int main(int argc, char **argv)
         hubo.sendControls();
     }
 
-    balance( hubo );
+    //balance( hubo );
     std::cout << "End\n";
     return 0;
 }
