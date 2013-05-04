@@ -503,125 +503,125 @@ void balance( Hubo_Control &hubo )
     }
 }
 
+bool stable(Hubo_Control &hubo)
+{
+    bool stable;
+    double stableTol = 0.001;
+    double rotVelX = hubo.getRotVelX();
+    double rotVelY = hubo.getRotVelY();
+    std::cout << "rotVelX: " << rotVelX << "\trotVelY: " << rotVelY << std::endl;
+    if(abs(rotVelX) < stableTol && abs(rotVelY) < stableTol)
+        stable = true;
+    else
+        stable = false;
+    return stable;
+}
 
 int main(int argc, char **argv)
 {
+    // create objects
     Hubo_Control hubo;
-
     HK::HuboKin hkin;
 
     hkin.kc.leg_l1 = 0; // eliminate neck -> waist Z distance
     hkin.kc.leg_l3 = 0; // eliminate waist -> hip Z distance
     hkin.kc.leg_l6 = 0; // eliminate ankle -> foot Z distance
 
+    // create nudge state
     nudge_state_t state;
     memset( &state, 0, sizeof(nudge_state_t) );
 
+    // open zmp ach channel
     ach_status_t r = ach_open( &zmp_chan, HUBO_CHAN_ZMP_TRAJ_NAME, NULL );
     fprintf( stderr, "%s (%d)\n", ach_result_to_string(r), (int)r );
-    
-    
+
+    // get zmp traj from ach channel
     size_t fs;
     zmp_traj_t trajectory;
-    memset( &trajectory, 0, sizeof(trajectory) );
-    ach_get( &zmp_chan, &trajectory, sizeof(trajectory), &fs, NULL, ACH_O_LAST );
+    size_t curTrajNumber = 0;
 
-    fprintf(stderr, "Count: %d\n", (int)trajectory.count);
-    for(int i=0; i<trajectory.count; i++)
-        fprintf(stdout, "%d: RHR %f\n", i, trajectory.traj[i].angles[RHR] );
-
-    hubo.update(true);
-    for(int i=0; i<HUBO_JOINT_COUNT; i++)
+    while(!daemon_sig_quit)
     {
-        hubo.setJointAngle( i, trajectory.traj[0].angles[i] );
-        hubo.setJointNominalSpeed( i, 0.4 );
-        hubo.setJointNominalAcceleration( i, 0.4 );
-    }
+        memset( &trajectory, 0, sizeof(trajectory) );
+        ach_get( &zmp_chan, &trajectory, sizeof(trajectory), &fs, NULL, ACH_O_LAST );
 
-    hubo.setJointNominalSpeed( RKN, 0.8 );
-    hubo.setJointNominalAcceleration( RKN, 0.8 );
-    hubo.setJointNominalSpeed( LKN, 0.8 );
-    hubo.setJointNominalAcceleration( LKN, 0.8 );
-
-    hubo.setJointAngle( RSR, trajectory.traj[0].angles[RSR] + hubo.getJointAngleMax(RSR) );
-    hubo.setJointAngle( LSR, trajectory.traj[0].angles[LSR] + hubo.getJointAngleMin(LSR) );
-
-    hubo.sendControls();
-
-    
-    double dt, time, stime; stime=hubo.getTime(); time=hubo.getTime();
-
-/*
-//    while( time - stime < 7 )
-    while(true)
-    {
-        hubo.update(true);
-        dt = hubo.getTime() - time;
-        time = hubo.getTime();
-
-        zmp_traj_element_t init = trajectory.traj[0];
-        init.forces[0][2] = 200; init.forces[1][2] = 200;
-
-        flattenFoot( hubo, init, state, dt );
-//        nudgeRefs( hubo, init, state, dt, hkin ); //vprev, verr, dt );
-
-        for(int i=0; i<HUBO_JOINT_COUNT; i++)
-            hubo.setJointAngle( i, init.angles[i] );
-        hubo.setJointAngle( RSR, init.angles[RSR] + hubo.getJointAngleMax(RSR) );
-        hubo.setJointAngle( LSR, init.angles[LSR] + hubo.getJointAngleMin(LSR) );
-
-        hubo.setJointAngleMin( LHR, init.angles[RHR] );
-        hubo.setJointAngleMax( RHR, init.angles[LHR] );
-        hubo.sendControls();
-    }
-
-    printf("Time elapsed\n");
-  */  
-
-
-
-
-
-
-
-    while( time - stime < 3 ) {
-      hubo.update(true);
-      time = hubo.getTime();
-    }
-
-
-    fprintf(stdout, "%d\n", (int)trajectory.count);
-    for(int t=1; t<trajectory.count-1; t++)
-    {
-
-        hubo.update(true);
-        dt = hubo.getTime() - time;
-        time = hubo.getTime();
-
-        flattenFoot( hubo, trajectory.traj[t], state, dt );
-        //nudgeRefs( hubo, trajectory.traj[t], state, dt, hkin ); //vprev, verr, dt );
-
-        for(int i=0; i<HUBO_JOINT_COUNT; i++)
+        // if there's a new trajectory and Hubo is stable execute new trajectory
+        if(trajectory.trajNumber > curTrajNumber && stable(hubo))
         {
-            hubo.setJointAngle( i, trajectory.traj[t].angles[i] );
-            hubo.setJointNominalSpeed( i,
-                   (trajectory.traj[t].angles[i]-trajectory.traj[t-1].angles[i])*TRAJ_FREQ_HZ );
-            double accel = TRAJ_FREQ_HZ*TRAJ_FREQ_HZ*(
-                                trajectory.traj[t-1].angles[i]
-                            - 2*trajectory.traj[t].angles[i]
-                            +   trajectory.traj[t+1].angles[i] );
-            hubo.setJointNominalAcceleration( i, 10*accel );
+            curTrajNumber = trajectory.trajNumber;
+            fprintf(stderr, "Count: %d\n", (int)trajectory.count);
+            //for(int i=0; i<trajectory.count; i++)
+            //    fprintf(stdout, "%d: RHR %f\n", i, trajectory.traj[i].angles[RHR] );
+
+            // update and set initial joint positions, speeds and accelerations
+            hubo.update(true);
+            for(int i=0; i<HUBO_JOINT_COUNT; i++)
+            {
+                hubo.setJointAngle( i, trajectory.traj[0].angles[i] );
+                hubo.setJointNominalSpeed( i, 0.4 );
+                hubo.setJointNominalAcceleration( i, 0.4 );
+            }
+
+            // set nominal speeds and acceleration of knee joints
+            hubo.setJointNominalSpeed( RKN, 0.8 );
+            hubo.setJointNominalAcceleration( RKN, 0.8 );
+            hubo.setJointNominalSpeed( LKN, 0.8 );
+            hubo.setJointNominalAcceleration( LKN, 0.8 );
+
+            // set initial should roll joint angles
+            hubo.setJointAngle( RSR, trajectory.traj[0].angles[RSR] + hubo.getJointAngleMax(RSR) );
+            hubo.setJointAngle( LSR, trajectory.traj[0].angles[LSR] + hubo.getJointAngleMin(LSR) );
+
+            // send commands
+            hubo.sendControls();
+
+            // initialize time variables
+            double dt, time, stime; stime=hubo.getTime(); time=hubo.getTime();
+
+            // update until 3 seconds has passed
+            while( time - stime < 3 ) {
+              hubo.update(true);
+              time = hubo.getTime();
+            }
+
+            // go through trajectory
+            fprintf(stdout, "%d\n", (int)trajectory.count);
+            for(int t=1; t<trajectory.count-1; t++)
+            {
+                // update state, delta time and time
+                hubo.update(true);
+                dt = hubo.getTime() - time;
+                time = hubo.getTime();
+
+                // flatten feet with compliance
+                flattenFoot( hubo, trajectory.traj[t], state, dt );
+                //nudgeRefs( hubo, trajectory.traj[t], state, dt, hkin ); //vprev, verr, dt );
+
+                // set joint angles for current trajectory tick
+                for(int i=0; i<HUBO_JOINT_COUNT; i++)
+                {
+                    hubo.setJointAngle( i, trajectory.traj[t].angles[i] );
+                    hubo.setJointNominalSpeed( i,
+                           (trajectory.traj[t].angles[i]-trajectory.traj[t-1].angles[i])*TRAJ_FREQ_HZ );
+                    double accel = TRAJ_FREQ_HZ*TRAJ_FREQ_HZ*(
+                                        trajectory.traj[t-1].angles[i]
+                                    - 2*trajectory.traj[t].angles[i]
+                                    +   trajectory.traj[t+1].angles[i] );
+                    hubo.setJointNominalAcceleration( i, 10*accel );
+                }
+
+                // set shoulder roll joint angles
+                hubo.setJointAngle( RSR, trajectory.traj[t].angles[RSR] + hubo.getJointAngleMax(RSR) );
+                hubo.setJointAngle( LSR, trajectory.traj[t].angles[LSR] + hubo.getJointAngleMin(LSR) );
+
+                // set hip roll joint angles
+                hubo.setJointAngleMin( LHR, trajectory.traj[t].angles[RHR] );
+                hubo.setJointAngleMax( RHR, trajectory.traj[t].angles[LHR] );
+
+                // send commands
+                hubo.sendControls();
+            }
         }
-
-        hubo.setJointAngle( RSR, trajectory.traj[t].angles[RSR] + hubo.getJointAngleMax(RSR) );
-        hubo.setJointAngle( LSR, trajectory.traj[t].angles[LSR] + hubo.getJointAngleMin(LSR) );
-
-        hubo.setJointAngleMin( LHR, trajectory.traj[t].angles[RHR] );
-        hubo.setJointAngleMax( RHR, trajectory.traj[t].angles[LHR] );
-        hubo.sendControls();
     }
-
-    //balance( hubo );
-    std::cout << "End\n";
     return 0;
 }

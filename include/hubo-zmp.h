@@ -36,6 +36,7 @@ enum {
 typedef struct zmp_traj {
   zmp_traj_element_t traj[MAX_TRAJ_SIZE];
   size_t count;
+  size_t trajNumber;
 } zmp_traj_t;
 
 #define HUBO_CHAN_ZMP_TRAJ_NAME "hubo-zmp-traj"
