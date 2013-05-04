@@ -503,14 +503,14 @@ void balance( Hubo_Control &hubo )
     }
 }
 
-bool stable(Hubo_Control &hubo)
+bool stable(Hubo_Control &hubo, double imuVelXInit, double imuVelYInit)
 {
     bool stable;
     double stableTol = 0.001;
     double rotVelX = hubo.getRotVelX();
     double rotVelY = hubo.getRotVelY();
     std::cout << "rotVelX: " << rotVelX << "\trotVelY: " << rotVelY << std::endl;
-    if(abs(rotVelX) < stableTol && abs(rotVelY) < stableTol)
+    if(abs(rotVelX-imuVelXInit) < stableTol && abs(rotVelY) < stableTol)
         stable = true;
     else
         stable = false;
@@ -540,13 +540,17 @@ int main(int argc, char **argv)
     zmp_traj_t trajectory;
     size_t curTrajNumber = 0;
 
+    // get initial rotational velocities of IMU
+    double imuVelXInit = hubo.getRotVelX();
+    double imuVelYInit = hubo.getRotVelY();
+ 
     while(!daemon_sig_quit)
     {
         memset( &trajectory, 0, sizeof(trajectory) );
         ach_get( &zmp_chan, &trajectory, sizeof(trajectory), &fs, NULL, ACH_O_LAST );
 
         // if there's a new trajectory and Hubo is stable execute new trajectory
-        if(trajectory.trajNumber > curTrajNumber && stable(hubo))
+        if(trajectory.trajNumber > curTrajNumber && stable(hubo, imuVelXInit, imuVelYInit))
         {
             curTrajNumber = trajectory.trajNumber;
             fprintf(stderr, "Count: %d\n", (int)trajectory.count);
