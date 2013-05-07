@@ -415,7 +415,7 @@ void nudgeRefs( Hubo_Control &hubo, zmp_traj_element_t &elem, //Eigen::Vector3d 
 void flattenFoot( Hubo_Control &hubo, zmp_traj_element_t &elem, nudge_state_t &state, double dt )
 {
     
-    std::cout << "RFz:" << hubo.getRightFootFz() << "RAP:" << state.raperr << "\tLFz:" << hubo.getLeftFootFz() << "\tLAP:" << state.laperr << std::endl;
+//    std::cout << "RFz:" << hubo.getRightFootFz() << "RAP:" << state.raperr << "\tLFz:" << hubo.getLeftFootFz() << "\tLAP:" << state.laperr << std::endl;
 
     if( fzMin < hubo.getRightFootFz() && hubo.getRightFootFz() < fzMax )
     {
@@ -509,7 +509,6 @@ bool stable(Hubo_Control &hubo, double imuVelXInit, double imuVelYInit)
     double stableTol = 1.0;
     double rotVelX = hubo.getRotVelX();
     double rotVelY = hubo.getRotVelY();
-    std::cout << "drotVelX: " << fabs(rotVelX-imuVelXInit) << "\tdrotVelY: " << fabs(rotVelY-imuVelYInit) << std::endl;
     if(fabs(rotVelX-imuVelXInit) < stableTol && fabs(rotVelY-imuVelYInit) < stableTol)
         stable = true;
     else
@@ -552,14 +551,7 @@ int main(int argc, char **argv)
         ach_get( &zmp_chan, &trajectory, sizeof(trajectory), &fs, NULL, ACH_O_LAST );
         hubo.update(true);
 
-        std::cout << "Curr Number: " << curTrajNumber << std::endl;
-        std::cout << "Traj Number: " << trajectory.trajNumber << std::endl;
         stableCheck = stable(hubo, imuVelXInit, imuVelYInit);
-        if(stableCheck == 1)
-            stableMessage = "Yes";
-        else
-            stableMessage = "No";
-        std::cout << "Stable? : " << stableMessage << std::endl;
 
         // if there's a new trajectory and Hubo is stable execute new trajectory
         if(trajectory.trajNumber > curTrajNumber && stable(hubo, imuVelXInit, imuVelYInit))
