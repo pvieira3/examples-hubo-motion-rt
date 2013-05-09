@@ -78,7 +78,7 @@ protected:
     double FLprev;
     double Pprev;
 
-    
+    bool ignoreNextTraj;    
 
     balance_state_t state;
  

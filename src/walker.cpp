@@ -503,17 +503,18 @@ void balance( Hubo_Control &hubo )
     }
 }
 
-bool stable(Hubo_Control &hubo, double imuVelXInit, double imuVelYInit)
+// This function should be balancing and handling external forces too.
+bool isStableCheck(Hubo_Control &hubo, double imuVelXInit, double imuVelYInit)
 {
-    bool stable;
+    bool isStable;
     double stableTol = 1.0;
     double rotVelX = hubo.getRotVelX();
     double rotVelY = hubo.getRotVelY();
     if(fabs(rotVelX-imuVelXInit) < stableTol && fabs(rotVelY-imuVelYInit) < stableTol)
-        stable = true;
+        isStable = true;
     else
-        stable = false;
-    return stable;
+        isStable = false;
+    return isStable;
 }
 
 int main(int argc, char **argv)
@@ -536,98 +537,153 @@ int main(int argc, char **argv)
 
     // get zmp traj from ach channel
     size_t fs;
-    zmp_traj_t trajectory;
-    size_t curTrajNumber = 0;
-    bool stableCheck;
-    std::string stableMessage;
+    zmp_traj_t curTrajectory, nextTrajectory;
+    bool nextTrajReady = false;
+    bool useNextTraj = false;
+    walkState_t walkState = STOP;
+    walkTransition_t walkTransition = STAY_STILL;
+    bool isStable;
 
     // get initial rotational velocities of IMU
     double imuVelXInit = hubo.getRotVelX();
     double imuVelYInit = hubo.getRotVelY();
+
+    // initialize time variables
+    double dt, time, stime;
  
     while(!daemon_sig_quit)
     {
-        memset( &trajectory, 0, sizeof(trajectory) );
-        ach_get( &zmp_chan, &trajectory, sizeof(trajectory), &fs, NULL, ACH_O_LAST );
-        hubo.update(true);
-
-        stableCheck = stable(hubo, imuVelXInit, imuVelYInit);
-
-        // if there's a new trajectory and Hubo is stable execute new trajectory
-        if(trajectory.trajNumber > curTrajNumber && stable(hubo, imuVelXInit, imuVelYInit))
+        // if we don't have a new trajectory or we're told to stop,
+        // then keep checking for walk trajectory
+        while(curTrajectory.count <= 0 || walkState == STOP)
         {
-            curTrajNumber = trajectory.trajNumber;
-            fprintf(stderr, "Count: %d\n", (int)trajectory.count);
-            //for(int i=0; i<trajectory.count; i++)
-            //    fprintf(stdout, "%d: RHR %f\n", i, trajectory.traj[i].angles[RHR] );
+            memset( &curTrajectory, 0, sizeof(curTrajectory) );
+            ach_get( &zmp_chan, &curTrajectory, sizeof(curTrajectory), &fs, NULL, ACH_O_LAST );
+        }
 
-            // update and set initial joint positions, speeds and accelerations
-            //hubo.update(true);
-            for(int i=0; i<HUBO_JOINT_COUNT; i++)
+        fprintf(stderr, "Count: %d\n", (int)curTrajectory.count);
+        //for(int i=0; i<trajectory.count; i++)
+        //    fprintf(stdout, "%d: RHR %f\n", i, trajectory.traj[i].angles[RHR] );
+
+        // once we get a trajectory, check if we need to stabelize first or if we
+        // can just keep walking, and then execute walk trajectory if not stopped
+        if( curTrajectory.walkTransition == SWITCH_WALK )
+            while(isStable == false)
+                isStable = isStableCheck(hubo, imuVelXInit, imuVelYInit);
+        if( curTrajectory.walkTransition == SWITCH_WALK )
+        {
+            // execute current trajectory
+            fprintf(stdout, "%d\n", (int)curTrajectory.count);
+            for(int t=0; t<curTrajectory.count-1; t++)
             {
-                hubo.setJointAngle( i, trajectory.traj[0].angles[i] );
-                hubo.setJointNominalSpeed( i, 0.4 );
-                hubo.setJointNominalAcceleration( i, 0.4 );
-            }
-
-            // set nominal speeds and acceleration of knee joints
-            hubo.setJointNominalSpeed( RKN, 0.8 );
-            hubo.setJointNominalAcceleration( RKN, 0.8 );
-            hubo.setJointNominalSpeed( LKN, 0.8 );
-            hubo.setJointNominalAcceleration( LKN, 0.8 );
-
-            // set initial should roll joint angles
-            hubo.setJointAngle( RSR, trajectory.traj[0].angles[RSR] + hubo.getJointAngleMax(RSR) );
-            hubo.setJointAngle( LSR, trajectory.traj[0].angles[LSR] + hubo.getJointAngleMin(LSR) );
-
-            // send commands
-            hubo.sendControls();
-
-            // initialize time variables
-            double dt, time, stime; stime=hubo.getTime(); time=hubo.getTime();
-
-            // update until 3 seconds has passed
-            while( time - stime < 3 ) {
-              hubo.update(true);
-              time = hubo.getTime();
-            }
-
-            // go through trajectory
-            fprintf(stdout, "%d\n", (int)trajectory.count);
-            for(int t=1; t<trajectory.count-1; t++)
-            {
-                // update state, delta time and time
-                hubo.update(true);
-                dt = hubo.getTime() - time;
-                time = hubo.getTime();
-
-                // flatten feet with compliance
-                flattenFoot( hubo, trajectory.traj[t], state, dt );
-                //nudgeRefs( hubo, trajectory.traj[t], state, dt, hkin ); //vprev, verr, dt );
-
-                // set joint angles for current trajectory tick
-                for(int i=0; i<HUBO_JOINT_COUNT; i++)
+                // ####################################
+                // ##### GET INTO WALK POSITION #######
+                // ####################################
+                if( t == 0 && curTrajectory.walkTransition == SWITCH_WALK )
                 {
-                    hubo.setJointAngle( i, trajectory.traj[t].angles[i] );
-                    hubo.setJointNominalSpeed( i,
-                           (trajectory.traj[t].angles[i]-trajectory.traj[t-1].angles[i])*TRAJ_FREQ_HZ );
-                    double accel = TRAJ_FREQ_HZ*TRAJ_FREQ_HZ*(
-                                        trajectory.traj[t-1].angles[i]
-                                    - 2*trajectory.traj[t].angles[i]
-                                    +   trajectory.traj[t+1].angles[i] );
-                    hubo.setJointNominalAcceleration( i, 10*accel );
+                    // update and set initial joint positions, speeds and accelerations
+                    hubo.update(true);
+                    for(int i=0; i<HUBO_JOINT_COUNT; i++)
+                    {
+                        hubo.setJointAngle( i, curTrajectory.traj[0].angles[i] );
+                        hubo.setJointNominalSpeed( i, 0.4 );
+                        hubo.setJointNominalAcceleration( i, 0.4 );
+                    }
+
+                    // set nominal speeds and acceleration of knee joints
+                    hubo.setJointNominalSpeed( RKN, 0.8 );
+                    hubo.setJointNominalAcceleration( RKN, 0.8 );
+                    hubo.setJointNominalSpeed( LKN, 0.8 );
+                    hubo.setJointNominalAcceleration( LKN, 0.8 );
+
+                    // set initial should roll joint angles
+                    hubo.setJointAngle( RSR, curTrajectory.traj[0].angles[RSR] + hubo.getJointAngleMax(RSR) );
+                    hubo.setJointAngle( LSR, curTrajectory.traj[0].angles[LSR] + hubo.getJointAngleMin(LSR) );
+
+                    // send commands
+                    hubo.sendControls();
+
+                    // initialize times
+                    stime=hubo.getTime(); time=hubo.getTime();
+
+                    // update until 3 seconds has passed
+                    while( time - stime < 3 ) {
+                      hubo.update(true);
+                      time = hubo.getTime();
+                    }
                 }
 
-                // set shoulder roll joint angles
-                hubo.setJointAngle( RSR, trajectory.traj[t].angles[RSR] + hubo.getJointAngleMax(RSR) );
-                hubo.setJointAngle( LSR, trajectory.traj[t].angles[LSR] + hubo.getJointAngleMin(LSR) );
+                // ####################################
+                // ##### ELSE CONTINUE WALKING  #######
+                // ####################################
+                else
+                {
+                    // if we don't have a next trajectory available
+                    if( nextTrajReady == false )
+                    {
+                        // check for next trajectory
+                        memset( &nextTrajectory, 0, sizeof(nextTrajectory) );
+                        ach_get( &zmp_chan, &nextTrajectory, sizeof(nextTrajectory), &fs, NULL, ACH_O_LAST );
 
-                // set hip roll joint angles
-                hubo.setJointAngleMin( LHR, trajectory.traj[t].angles[RHR] );
-                hubo.setJointAngleMax( RHR, trajectory.traj[t].angles[LHR] );
+                        // if we received a next trajectory
+                        if( nextTrajectory.trajNumber > curTrajectory.trajNumber )
+                        {
+                            // check if its start tick is already passed, indicate that the
+                            // next trajectory is ready but we shouldn't use it
+                            if( t > nextTrajectory.startTick || nextTrajectory.walkTransition == SWITCH_WALK )
+                            {
+                                useNextTraj = false;
+                                nextTrajReady = true;
+                            }
+                            else // if we can use it, indicate that we can use it
+                            {
+                                useNextTraj = true;
+                                nextTrajReady = true;
+                            }
+                        }
+                    }
+                    // if the next trajectory starts on the current tick,
+                    // then reset t to 0 and start executing it from here
+                    if( useNextTraj == true && nextTrajectory.startTick == t )
+                    {
+                        curTrajectory = nextTrajectory;
+                        t = 0;
+                        nextTrajReady = false;
+                    }
 
-                // send commands
-                hubo.sendControls();
+                    // update state, delta time and time
+                    hubo.update(true);
+                    dt = hubo.getTime() - time;
+                    time = hubo.getTime();
+
+                    // flatten feet with compliance
+                    flattenFoot( hubo, curTrajectory.traj[t], state, dt );
+                    //nudgeRefs( hubo, trajectory.traj[t], state, dt, hkin ); //vprev, verr, dt );
+
+                    // set joint angles for current trajectory tick
+                    for(int i=0; i<HUBO_JOINT_COUNT; i++)
+                    {
+                        hubo.setJointAngle( i, curTrajectory.traj[t].angles[i] );
+                        hubo.setJointNominalSpeed( i,
+                               (curTrajectory.traj[t].angles[i]-curTrajectory.traj[t-1].angles[i])*TRAJ_FREQ_HZ );
+                        double accel = TRAJ_FREQ_HZ*TRAJ_FREQ_HZ*(
+                                            curTrajectory.traj[t-1].angles[i]
+                                        - 2*curTrajectory.traj[t].angles[i]
+                                        +   curTrajectory.traj[t+1].angles[i] );
+                        hubo.setJointNominalAcceleration( i, 10*accel );
+                    }
+
+                    // set shoulder roll joint angles
+                    hubo.setJointAngle( RSR, curTrajectory.traj[t].angles[RSR] + hubo.getJointAngleMax(RSR) );
+                    hubo.setJointAngle( LSR, curTrajectory.traj[t].angles[LSR] + hubo.getJointAngleMin(LSR) );
+
+                    // set hip roll joint angles
+                    hubo.setJointAngleMin( LHR, curTrajectory.traj[t].angles[RHR] );
+                    hubo.setJointAngleMax( RHR, curTrajectory.traj[t].angles[LHR] );
+
+                    // send commands
+                    hubo.sendControls();
+                }
             }
         }
     }

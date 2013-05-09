@@ -24,6 +24,13 @@ enum walkState_t {
   STOP
 };
 
+enum walkTransition_t {
+  STAY_STILL = 0,
+  KEEP_WALKING,
+  SWITCH_WALK,
+  WALK_TO_STOP
+};
+
 typedef struct zmp_traj_element {
   double angles[HUBO_JOINT_COUNT];
   // XYZ pos/vel/accel in frame of stance ANKLE
@@ -45,7 +52,9 @@ typedef struct zmp_traj {
   zmp_traj_element_t traj[MAX_TRAJ_SIZE];
   size_t count;
   size_t trajNumber;
+  size_t startTick;
   walkState_t walkState;
+  walkTransition_t walkTransition;
 } zmp_traj_t;
 
 #define HUBO_CHAN_ZMP_TRAJ_NAME "hubo-zmp-traj"
