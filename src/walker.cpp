@@ -554,7 +554,7 @@ int main(int argc, char **argv)
 
     // open zmp ach channel
     ach_status_t r = ach_open( &zmp_chan, HUBO_CHAN_ZMP_TRAJ_NAME, NULL );
-    fprintf( stderr, "%s (%d)\n", ach_result_to_string(r), (int)r );
+    fprintf( stderr, "ach_open: %s (%d)\n", ach_result_to_string(r), (int)r );
 
     // get zmp traj from ach channel
     size_t fs;
@@ -576,27 +576,39 @@ int main(int argc, char **argv)
 
     while(!daemon_sig_quit)
     {
+        std::cout << "Getting trajectory\n";
         // if we don't have a new trajectory or we're told to stop,
         // then keep checking for walk trajectory
-        while(curTrajectory.count <= 0 || walkState == STOP)
+        while(curTrajectory.count <= 0 || curTrajectory.walkState == STOP)
         {
             memset( &curTrajectory, 0, sizeof(curTrajectory) );
-            ach_get( &zmp_chan, &curTrajectory, sizeof(curTrajectory), &fs, NULL, ACH_O_LAST );
+            ach_status r = ach_get( &zmp_chan, &curTrajectory, sizeof(curTrajectory), &fs, NULL, ACH_O_LAST );
+            if(r != ACH_STALE_FRAMES)
+            {
+                fprintf(stdout, "ach_get_result: %s\n", ach_result_to_string(r));
+                std::cout << "count = " << curTrajectory.count << std::endl;
+            }
         }
 
-        fprintf(stderr, "Count: %d\n", (int)curTrajectory.count);
+        fprintf(stderr, "Traj got. Count: %d\n", (int)curTrajectory.count);
         //for(int i=0; i<trajectory.count; i++)
         //    fprintf(stdout, "%d: RHR %f\n", i, trajectory.traj[i].angles[RHR] );
 
         // once we get a trajectory, check if we need to stabelize first or if we
         // can just keep walking, and then execute walk trajectory if not stopped
         if( curTrajectory.walkTransition == SWITCH_WALK )
+        {
+            std::cout << "stabilizing\n";
             while(isStable == false)
+            {
                 isStable = isStableCheck(hubo, imuVelXInit, imuVelYInit);
+                std::cout << "stable! (hopefully)\n";
+            }
+        }
+
         if( curTrajectory.walkTransition == SWITCH_WALK )
         {
             // execute current trajectory
-            fprintf(stdout, "%d\n", (int)curTrajectory.count);
             for(int t=0; t<curTrajectory.count-1; t++)
             {
                 // ####################################
@@ -604,6 +616,7 @@ int main(int argc, char **argv)
                 // ####################################
                 if( t == 0 && curTrajectory.walkTransition == SWITCH_WALK )
                 {
+                    std::cout << "getting into walk position\n";
                     // update and set initial joint positions, speeds and accelerations
                     hubo.update(true);
                     for(int i=0; i<HUBO_JOINT_COUNT; i++)
@@ -641,7 +654,7 @@ int main(int argc, char **argv)
                 // ####################################
                 else
                 {
-
+                    std::cout << "continue walk, tick " << t << std::endl;
                     // if we don't have a next trajectory available
                     if( nextTrajReady == false )
                     {
@@ -670,6 +683,7 @@ int main(int argc, char **argv)
                     // then reset t to 0 and start executing it from here
                     if( useNextTraj == true && nextTrajectory.startTick == t )
                     {
+                        std::cout << "swapping in next trajectory\n";
                         // FIXME store current angles in order to check change next iteration
                         memset(&jointAngles, 0, sizeof(jointAngles));
                         memcpy(&jointAngles, &curTrajectory.traj[t].angles, sizeof(jointAngles));
@@ -679,11 +693,11 @@ int main(int argc, char **argv)
                         nextTrajReady = false;
                     }
 
-
                     // validate trajectory swap in by checking angles before swap-in
                     // and after swap-in
                     if(t == 0)
                     {
+                        std::cout << "validating\n";
                         validateTrajSwapIn(curTrajectory.traj[0].angles, jointAngles);
                     }
 
