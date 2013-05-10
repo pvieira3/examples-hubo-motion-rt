@@ -484,7 +484,7 @@ void balance( Hubo_Control &hubo )
             hubo.setJointVelocity( LAR, leftR );
 
             // send controls
-            hubo.sendControls();
+            //hubo.sendControls();
 
              // print output every imax cycles
             if( i>=imax )
@@ -516,6 +516,27 @@ bool isStableCheck(Hubo_Control &hubo, double imuVelXInit, double imuVelYInit)
         isStable = false;
     return isStable;
 }
+
+/**
+* @function: validateOutputData(TrajVector& traj)
+* @brief: validation of joint angle output trajectory data
+* @return: void
+*/
+void validateTrajSwapIn(double prevAngles[HUBO_JOINT_COUNT], double newAngles[HUBO_JOINT_COUNT]) {
+    const double dt = 1.0/TRAJ_FREQ_HZ;
+    double maxJointVel=0;
+    double jointVel;
+    const double jointVelTol = 6.0; // radians/s
+    for (int j=0; j<HUBO_JOINT_COUNT; j++) {  
+      jointVel = (prevAngles[j] - newAngles[j])/dt;
+      if (jointVel > jointVelTol) {
+        std::cerr << "change in joint " << jointNames[j] << " is larger than " << jointVelTol << "(" << jointVel << ")\n";
+      }
+      if (jointVel > maxJointVel) maxJointVel = jointVel;
+    }
+    std::cerr << "maxJntVel: " << maxJointVel << std::endl;
+}
+
 
 int main(int argc, char **argv)
 {
@@ -550,7 +571,9 @@ int main(int argc, char **argv)
 
     // initialize time variables
     double dt, time, stime;
- 
+    double qDotTolerance = 0.005; // tolerance for joint change 
+    double jointAngles[HUBO_JOINT_COUNT]; // to store current joint angles
+
     while(!daemon_sig_quit)
     {
         // if we don't have a new trajectory or we're told to stop,
@@ -601,7 +624,7 @@ int main(int argc, char **argv)
                     hubo.setJointAngle( LSR, curTrajectory.traj[0].angles[LSR] + hubo.getJointAngleMin(LSR) );
 
                     // send commands
-                    hubo.sendControls();
+                    //hubo.sendControls();
 
                     // initialize times
                     stime=hubo.getTime(); time=hubo.getTime();
@@ -618,6 +641,7 @@ int main(int argc, char **argv)
                 // ####################################
                 else
                 {
+
                     // if we don't have a next trajectory available
                     if( nextTrajReady == false )
                     {
@@ -646,9 +670,21 @@ int main(int argc, char **argv)
                     // then reset t to 0 and start executing it from here
                     if( useNextTraj == true && nextTrajectory.startTick == t )
                     {
+                        // FIXME store current angles in order to check change next iteration
+                        memset(&jointAngles, 0, sizeof(jointAngles));
+                        memcpy(&jointAngles, &curTrajectory.traj[t].angles, sizeof(jointAngles));
+
                         curTrajectory = nextTrajectory;
                         t = 0;
                         nextTrajReady = false;
+                    }
+
+
+                    // validate trajectory swap in by checking angles before swap-in
+                    // and after swap-in
+                    if(t == 0)
+                    {
+                        validateTrajSwapIn(curTrajectory.traj[0].angles, jointAngles);
                     }
 
                     // update state, delta time and time
@@ -657,7 +693,7 @@ int main(int argc, char **argv)
                     time = hubo.getTime();
 
                     // flatten feet with compliance
-                    flattenFoot( hubo, curTrajectory.traj[t], state, dt );
+//uncomment before running                    flattenFoot( hubo, curTrajectory.traj[t], state, dt );
                     //nudgeRefs( hubo, trajectory.traj[t], state, dt, hkin ); //vprev, verr, dt );
 
                     // set joint angles for current trajectory tick
@@ -682,7 +718,7 @@ int main(int argc, char **argv)
                     hubo.setJointAngleMax( RHR, curTrajectory.traj[t].angles[LHR] );
 
                     // send commands
-                    hubo.sendControls();
+                    //hubo.sendControls();
                 }
             }
         }
