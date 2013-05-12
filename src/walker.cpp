@@ -522,19 +522,22 @@ bool isStableCheck(Hubo_Control &hubo, double imuVelXInit, double imuVelYInit)
 * @brief: validation of joint angle output trajectory data
 * @return: void
 */
-void validateTrajSwapIn(double prevAngles[HUBO_JOINT_COUNT], double newAngles[HUBO_JOINT_COUNT]) {
+bool validateTrajSwapIn(double prevAngles[HUBO_JOINT_COUNT], double newAngles[HUBO_JOINT_COUNT]) {
     const double dt = 1.0/TRAJ_FREQ_HZ;
     double maxJointVel=0;
     double jointVel;
+    bool OK = true;
     const double jointVelTol = 6.0; // radians/s
     for (int j=0; j<HUBO_JOINT_COUNT; j++) {  
       jointVel = (prevAngles[j] - newAngles[j])/dt;
       if (jointVel > jointVelTol) {
         std::cerr << "change in joint " << jointNames[j] << " is larger than " << jointVelTol << "(" << jointVel << ")\n";
+        OK = false;
       }
       if (jointVel > maxJointVel) maxJointVel = jointVel;
     }
     std::cerr << "maxJntVel: " << maxJointVel << std::endl;
+    return OK;
 }
 
 
@@ -585,18 +588,20 @@ int main(int argc, char **argv)
             ach_status r = ach_get( &zmp_chan, &curTrajectory, sizeof(curTrajectory), &fs, NULL, ACH_O_LAST );
             if(r != ACH_STALE_FRAMES)
             {
-                fprintf(stdout, "ach_get_result: %s\n", ach_result_to_string(r));
-                std::cout << "count = " << curTrajectory.count << std::endl;
+               // fprintf(stdout, "ach_get_result: %s\n", ach_result_to_string(r));
             }
         }
 
-        fprintf(stderr, "Traj got. Count: %d\n", (int)curTrajectory.count);
+        std::cout << "Got trajectory # " << curTrajectory.trajNumber
+                  << "\nwalkState: " << curTrajectory.walkState
+                  << "\nwalkTransition: " << curTrajectory.walkTransition
+                  << std::endl;
         //for(int i=0; i<trajectory.count; i++)
         //    fprintf(stdout, "%d: RHR %f\n", i, trajectory.traj[i].angles[RHR] );
 
         // once we get a trajectory, check if we need to stabelize first or if we
         // can just keep walking, and then execute walk trajectory if not stopped
-        if( curTrajectory.walkTransition == SWITCH_WALK )
+        if( curTrajectory.walkTransition == SWITCH_WALK || curTrajectory.walkTransition == KEEP_WALKING )
         {
             std::cout << "stabilizing\n";
             while(isStable == false)
@@ -606,7 +611,7 @@ int main(int argc, char **argv)
             }
         }
 
-        if( curTrajectory.walkTransition == SWITCH_WALK )
+        if( curTrajectory.walkTransition == SWITCH_WALK || curTrajectory.walkTransition == KEEP_WALKING )
         {
             // execute current trajectory
             for(int t=0; t<curTrajectory.count-1; t++)
@@ -614,7 +619,7 @@ int main(int argc, char **argv)
                 // ####################################
                 // ##### GET INTO WALK POSITION #######
                 // ####################################
-                if( t == 0 && curTrajectory.walkTransition == SWITCH_WALK )
+                if( t == 0 && (curTrajectory.walkTransition == SWITCH_WALK || curTrajectory.walkTransition == KEEP_WALKING) )
                 {
                     std::cout << "getting into walk position\n";
                     // update and set initial joint positions, speeds and accelerations
@@ -637,7 +642,7 @@ int main(int argc, char **argv)
                     hubo.setJointAngle( LSR, curTrajectory.traj[0].angles[LSR] + hubo.getJointAngleMin(LSR) );
 
                     // send commands
-                    //hubo.sendControls();
+                    hubo.sendControls();
 
                     // initialize times
                     stime=hubo.getTime(); time=hubo.getTime();
@@ -654,7 +659,6 @@ int main(int argc, char **argv)
                 // ####################################
                 else
                 {
-                    std::cout << "continue walk, tick " << t << std::endl;
                     // if we don't have a next trajectory available
                     if( nextTrajReady == false )
                     {
@@ -683,22 +687,28 @@ int main(int argc, char **argv)
                     // then reset t to 0 and start executing it from here
                     if( useNextTraj == true && nextTrajectory.startTick == t )
                     {
-                        std::cout << "swapping in next trajectory\n";
+                        std::cout << "swapping in next trajectory # " << nextTrajectory.trajNumber << "\n";
                         // FIXME store current angles in order to check change next iteration
                         memset(&jointAngles, 0, sizeof(jointAngles));
                         memcpy(&jointAngles, &curTrajectory.traj[t].angles, sizeof(jointAngles));
 
-                        curTrajectory = nextTrajectory;
-                        t = 0;
-                        nextTrajReady = false;
-                    }
-
-                    // validate trajectory swap in by checking angles before swap-in
-                    // and after swap-in
-                    if(t == 0)
-                    {
+                        // validate trajectory swap in by checking angles before swap-in
+                        // and after swap-in
+                        bool OK;
                         std::cout << "validating\n";
-                        validateTrajSwapIn(curTrajectory.traj[0].angles, jointAngles);
+                        OK = validateTrajSwapIn(nextTrajectory.traj[0].angles, jointAngles);
+                        if(OK == false)
+                        {
+                            // finish executing trajectory
+                            nextTrajReady = true;
+                            exit(-1);
+                        }
+                        else
+                        {
+                            curTrajectory = nextTrajectory;
+                            t = 0;
+                            nextTrajReady = false;
+                        }
                     }
 
                     // update state, delta time and time
@@ -707,7 +717,7 @@ int main(int argc, char **argv)
                     time = hubo.getTime();
 
                     // flatten feet with compliance
-//uncomment before running                    flattenFoot( hubo, curTrajectory.traj[t], state, dt );
+//FIXME uncomment before running                    flattenFoot( hubo, curTrajectory.traj[t], state, dt );
                     //nudgeRefs( hubo, trajectory.traj[t], state, dt, hkin ); //vprev, verr, dt );
 
                     // set joint angles for current trajectory tick
@@ -732,7 +742,7 @@ int main(int argc, char **argv)
                     hubo.setJointAngleMax( RHR, curTrajectory.traj[t].angles[LHR] );
 
                     // send commands
-                    //hubo.sendControls();
+                    hubo.sendControls();
                 }
             }
         }
