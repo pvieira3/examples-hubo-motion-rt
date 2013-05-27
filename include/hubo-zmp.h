@@ -2,6 +2,8 @@
 #define _HUBO_ZMP_H_
 
 #include <stdlib.h>
+#include <vector>
+#include "stdint.h"
 
 #ifdef HAVE_HUBO_ACH
 #include <hubo.h>
@@ -13,7 +15,7 @@ enum stance_t {
   DOUBLE_LEFT  = 0,
   DOUBLE_RIGHT = 1,
   SINGLE_LEFT  = 2,
-  SINGLE_RIGHT = 3,
+  SINGLE_RIGHT = 3
 };
 
 enum walkState_t {
@@ -31,6 +33,13 @@ enum walkTransition_t {
   WALK_TO_STOP
 };
 
+
+enum {
+  ZMP_TRAJ_FREQ_HZ = 200,
+  ZMP_MAX_TRAJ_SIZE = 2000
+};
+
+
 typedef struct zmp_traj_element {
   double angles[HUBO_JOINT_COUNT];
   // XYZ pos/vel/accel in frame of stance ANKLE
@@ -43,13 +52,8 @@ typedef struct zmp_traj_element {
   stance_t stance;
 } zmp_traj_element_t;
 
-enum {
-  TRAJ_FREQ_HZ = 200,
-  MAX_TRAJ_SIZE = 2000,
-};
-
 typedef struct zmp_traj {
-  zmp_traj_element_t traj[MAX_TRAJ_SIZE];
+  zmp_traj_element_t traj[ZMP_MAX_TRAJ_SIZE];
   size_t count;
   size_t trajNumber;
   size_t startTick;

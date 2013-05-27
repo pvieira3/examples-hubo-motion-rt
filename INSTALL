@@ -11,6 +11,13 @@ $ sudo apt-get upgrade
 $ sudo apt-get install autoconf
 
 ____________________________________________________________
+AUTOMATIC INSTALLATION METHOD
+
+1. run the install script
+    $ ./install
+
+____________________________________________________________
+MANUAL INSTALLATION METHOD
 
 1. Now to use autotools:
 

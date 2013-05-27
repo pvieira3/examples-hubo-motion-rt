@@ -561,7 +561,7 @@ int main(int argc, char **argv)
 
     // get zmp traj from ach channel
     size_t fs;
-    zmp_traj_t curTrajectory, nextTrajectory;
+    zmp_traj_t curTrajectory, nextTrajectory, stopTrajectory;
     bool nextTrajReady = false;
     bool useNextTraj = false;
     walkState_t walkState = STOP;
@@ -576,13 +576,15 @@ int main(int argc, char **argv)
     double dt, time, stime;
     double qDotTolerance = 0.005; // tolerance for joint change 
     double jointAngles[HUBO_JOINT_COUNT]; // to store current joint angles
+    size_t trajNumber = 0;
 
     while(!daemon_sig_quit)
     {
+        trajNumber = 0;
         std::cout << "Getting trajectory\n";
         // if we don't have a new trajectory or we're told to stop,
         // then keep checking for walk trajectory
-        while(curTrajectory.count <= 0 || curTrajectory.walkState == STOP)
+        while((curTrajectory.count <= 0 || curTrajectory.walkTransition != SWITCH_WALK) && curTrajectory.trajNumber <= trajNumber)
         {
             memset( &curTrajectory, 0, sizeof(curTrajectory) );
             ach_status r = ach_get( &zmp_chan, &curTrajectory, sizeof(curTrajectory), &fs, NULL, ACH_O_LAST );
@@ -683,28 +685,32 @@ int main(int argc, char **argv)
                             }
                         }
                     }
+
+                    // check to see if we should stop walking. If so don't use next traj
+                    memset( &stopTrajectory, 0, sizeof(stopTrajectory) );
+                    ach_get( &zmp_chan, &stopTrajectory, sizeof(stopTrajectory), &fs, NULL, ACH_O_LAST );
+                    if(stopTrajectory.walkTransition == WALK_TO_STOP)
+                        useNextTraj = false;
+
                     // if the next trajectory starts on the current tick,
                     // then reset t to 0 and start executing it from here
                     if( useNextTraj == true && nextTrajectory.startTick == t )
                     {
-                        std::cout << "swapping in next trajectory # " << nextTrajectory.trajNumber << "\n";
-                        // FIXME store current angles in order to check change next iteration
-                        memset(&jointAngles, 0, sizeof(jointAngles));
-                        memcpy(&jointAngles, &curTrajectory.traj[t].angles, sizeof(jointAngles));
-
                         // validate trajectory swap in by checking angles before swap-in
                         // and after swap-in
                         bool OK;
                         std::cout << "validating\n";
-                        OK = validateTrajSwapIn(nextTrajectory.traj[0].angles, jointAngles);
+                        OK = validateTrajSwapIn(nextTrajectory.traj[0].angles, curTrajectory.traj[t].angles);
                         if(OK == false)
                         {
                             // finish executing trajectory
+                            std::cout << "not swapping in next trajectory. Finishing current trajectory.\n";
                             nextTrajReady = true;
                             exit(-1);
                         }
                         else
                         {
+                            std::cout << "swapping in next trajectory # " << nextTrajectory.trajNumber << ".\n";
                             curTrajectory = nextTrajectory;
                             t = 0;
                             nextTrajReady = false;
